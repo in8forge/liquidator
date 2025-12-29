@@ -1,155 +1,114 @@
-# 🦀 Liquidator V8.0 - Rust Edition
+# Liquidator
 
-High-performance multi-chain DeFi liquidation bot written in Rust.
-
-## Why Rust?
-
-| Metric | Node.js V7.5 | Rust V8.0 |
-|--------|--------------|-----------|
-| Latency | ~100-500ms | ~10-50ms |
-| Memory | ~150MB | ~20MB |
-| Concurrency | Event loop | True parallelism |
-| Type Safety | Runtime errors | Compile-time |
+Multi-chain DeFi liquidation bot written in Rust. Monitors borrower positions across Aave V3, Compound V3, and Venus, executing profitable liquidations with MEV protection.
 
 ## Features
 
-- 🔥 **Multi-chain**: Base, Polygon, Arbitrum, Avalanche, BNB
-- 🔥 **Multi-protocol**: Aave V3, Compound V3, Venus
-- ⚡ **Fast**: Native async with Tokio
-- 🛡️ **MEV Protection**: Flashbots integration
-- 📊 **Health endpoint**: `/health` for monitoring
-- 🔌 **Circuit breaker**: Auto-pause on failures
-- 🧪 **Dry run mode**: Test without executing
+- **Adaptive scanning** - Tiered monitoring reduces RPC usage by 80-90% during stable markets
+- **Multi-chain** - Supports Base, Polygon, Arbitrum, Avalanche, BNB Chain
+- **Multi-protocol** - Aave V3, Compound V3, Venus
+- **RPC failover** - Automatic rotation between free and premium endpoints
+- **MEV protection** - Flashbots integration for private transaction submission
 
-## Quick Start
+## How It Works
 
-### Prerequisites
+The bot uses an event-driven architecture with three scanning tiers:
 
-- Rust 1.75+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
-- Funded wallet with gas on target chains
+| Tier | Interval | Target |
+|------|----------|--------|
+| Critical | 2s | Positions with HF < 1.1 |
+| Watchlist | 10s | Positions with HF < 1.5 |
+| Full | 2min | All tracked borrowers |
 
-### Build
+Positions are automatically promoted/demoted between tiers based on health factor changes. Price volatility (>5% moves) triggers immediate rescans.
 
+## Requirements
+
+- Rust 1.70+
+- RPC endpoints (WebSocket + HTTP) for each chain
+- Private key with gas funds on target chains
+
+## Installation
 ```bash
-# Debug build
-cargo build
-
-# Release build (optimized)
+git clone https://github.com/in8forge/liquidator.git
+cd liquidator
 cargo build --release
 ```
 
-### Configure
+## Configuration
 
+Create a `.env` file:
 ```bash
-cp .env.example .env
-# Edit .env with your keys
+# Required
+PRIVATE_KEY=0x...
+DRY_RUN=true
+
+# RPC endpoints (comma-separated for failover)
+BASE_RPC_URLS=wss://base-mainnet.g.alchemy.com/v2/...,https://mainnet.base.org
+POLYGON_RPC_URLS=wss://polygon-mainnet.g.alchemy.com/v2/...
+ARBITRUM_RPC_URLS=wss://arb-mainnet.g.alchemy.com/v2/...
+AVALANCHE_RPC_URLS=wss://api.avax.network/ext/bc/C/ws
+BNB_RPC_URLS=wss://bsc-mainnet.nodereal.io/ws/v1/...
+
+# Protocol addresses (per chain)
+BASE_POOL_ADDRESS=0x...
+BASE_DATA_PROVIDER=0x...
+
+# Optional
+MIN_PROFIT_USD=10
+MEV_THRESHOLD_USD=50
+DISCORD_WEBHOOK=https://discord.com/api/webhooks/...
+HEALTH_PORT=8080
 ```
 
-### Run
-
+## Usage
 ```bash
-# Debug mode
-cargo run
+# Dry run (recommended first)
+DRY_RUN=true cargo run --release
 
-# Release mode
-cargo run --release
-
-# With logging
-RUST_LOG=info cargo run --release
+# Live
+DRY_RUN=false cargo run --release
 ```
 
-## Project Structure
+The bot exposes a health endpoint at `http://localhost:8080/health` for monitoring.
 
+## Architecture
 ```
-liquidator-rs/
-├── Cargo.toml          # Dependencies
-├── src/
-│   ├── main.rs         # Entry point
-│   ├── config.rs       # Configuration
-│   ├── types.rs        # Data structures
-│   ├── chains.rs       # Multi-chain management
-│   ├── executor.rs     # TX execution
-│   ├── health.rs       # Health server
-│   ├── discord.rs      # Notifications
-│   └── protocols/
-│       ├── mod.rs
-│       ├── aave.rs     # Aave V3
-│       ├── compound.rs # Compound V3
-│       └── venus.rs    # Venus
-└── .env.example
+src/
+├── main.rs          # Entry point, orchestration
+├── scanner.rs       # Adaptive scanning, liquidation detection
+├── chains.rs        # Multi-RPC management, failover
+├── protocols/
+│   ├── aave.rs      # Aave V3 integration
+│   ├── compound.rs  # Compound V3 (Comet) integration
+│   └── venus.rs     # Venus integration
+├── executor.rs      # Transaction execution, MEV
+├── oracle.rs        # Price feeds, WebSocket subscriptions
+└── borrowers.rs     # Position tracking, persistence
 ```
 
-## Performance Optimizations
+## Monitoring
 
-1. **Async runtime**: Tokio with work-stealing scheduler
-2. **Zero-copy**: Uses `alloy` for efficient EVM interactions
-3. **Lock-free**: DashMap for concurrent price caching
-4. **Batch RPC**: Multicall3 for position checking
-5. **Release profile**: LTO, single codegen unit, stripped binary
+Discord notifications for:
+- Startup/shutdown
+- Liquidation attempts (success/fail)
+- Significant price movements
+- Auto-withdrawals from liquidator contracts
 
-## Build Profiles
-
-```toml
-[profile.release]
-opt-level = 3      # Max optimization
-lto = true         # Link-time optimization
-codegen-units = 1  # Better optimization
-panic = "abort"    # Smaller binary
-strip = true       # Remove debug symbols
+Stats logged every 60 seconds:
+```
+Events: 142 | Checks: 89 | Attempted: 3 | Success: 2 | Failed: 1 | Skipped: 12 | Competitor: 1
 ```
 
-## Health Endpoint
+## Disclaimer
 
-```bash
-curl http://localhost:3847/health
-```
+This software is provided as-is. Running liquidation bots involves financial risk. You are responsible for:
 
-```json
-{
-  "status": "healthy",
-  "chains": ["base", "polygon", "arbitrum"],
-  "stats": {
-    "events": 1523,
-    "checks": 120,
-    "liquidations": 2
-  },
-  "circuit_breaker": {
-    "is_open": false,
-    "consecutive_failures": 0
-  }
-}
-```
-
-## Roadmap
-
-- [x] Project scaffold
-- [x] Config management
-- [x] Chain connections
-- [x] Health endpoint
-- [x] Aave position checking (Multicall batched)
-- [x] Circuit breaker
-- [x] Execution locks with timeout
-- [x] Nonce management
-- [x] Discord notifications
-- [x] Graceful shutdown
-- [x] WebSocket price feeds (Chainlink)
-- [x] Borrower discovery
-- [x] Borrower persistence (JSON)
-- [x] Scanner module
-- [x] Profit simulation
-- [x] Competitor detection
-- [x] Dry run mode
-- [ ] Compound V3 full support
-- [ ] Venus full support
-- [ ] Flash loan TX building
-- [ ] MEV protection (Flashbots)
-- [ ] Swap path validation
-- [ ] Profit withdrawal
+- Securing your private keys
+- Understanding gas costs and potential losses
+- Complying with applicable laws
+- Testing thoroughly in dry-run mode first
 
 ## License
 
 MIT
-
-## Author
-
-Doss - in8forge@proton.me
